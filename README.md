@@ -319,15 +319,6 @@ wasmtime --dir . runner.wasm -- -f math ./tests
 Grain compiles to WebAssembly. The `grain` CLI doesn't support `Fs.readDir` for
 directory scanning, but `wasmtime` does when given `--dir .` permission.
 
-## Why Result-Based Assertions?
-
-Grain currently doesn't support exception catching, so the framework uses
-`Result<Void, String>` for all assertions. This provides:
-
-1. **Explicit error handling** - no surprises
-2. **Composable assertions** - chain with `andThen()` or collect with `all()`
-3. **Clear error messages** - failures include context
-
 ## License
 
 MIT
