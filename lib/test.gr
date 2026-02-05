@@ -19,6 +19,13 @@ provide enum TestStatus {
   Skipped(String),
 }
 
+// ANSI color helpers
+let red = (s) => "\u001b[31m" ++ s ++ "\u001b[0m"
+let green = (s) => "\u001b[32m" ++ s ++ "\u001b[0m"
+let yellow = (s) => "\u001b[33m" ++ s ++ "\u001b[0m"
+let gray = (s) => "\u001b[90m" ++ s ++ "\u001b[0m"
+let whiteOnRed = (s) => "\u001b[97;41m" ++ s ++ "\u001b[0m"
+
 provide record TestResult {
   name: String,
   status: TestStatus,
@@ -171,7 +178,11 @@ provide let afterEach = (fn: () => Void) => {
 
 provide let assertEquals = (expected, actual) => {
   if (expected != actual) {
-    Err("AssertionError: Values are not equal.\n\n    [Diff] Actual / Expected\n\n-   " ++ toString(actual) ++ "\n+   " ++ toString(expected))
+    let msg = "AssertionError: Values are not equal.\n\n" ++
+      gray("    [Diff] Actual / Expected") ++ "\n\n" ++
+      red("-   " ++ toString(actual)) ++ "\n" ++
+      green("+   " ++ toString(expected))
+    Err(msg)
   } else {
     Ok(void)
   }
@@ -409,7 +420,7 @@ let formatMs = (ms) => {
 let runSingleTest = (def) => {
   if (def.options.ignore) {
     let result = { name: def.name, status: Skipped("Test marked as ignore"), durationMs: 0 }
-    print(def.name ++ " ... ignored")
+    print(yellow(def.name ++ " ... ignored"))
     result
   } else {
     let start = getTimeNs()
@@ -423,9 +434,9 @@ let runSingleTest = (def) => {
       Err(msg) => { name: def.name, status: Failed(msg), durationMs },
     }
     match (result.status) {
-      Passed => print(def.name ++ " ... ok " ++ formatMs(durationMs)),
-      Failed(_) => print(def.name ++ " ... FAILED " ++ formatMs(durationMs)),
-      Skipped(_) => print(def.name ++ " ... ignored"),
+      Passed => print(green(def.name ++ " ... ok " ++ formatMs(durationMs))),
+      Failed(_) => print(red(def.name ++ " ... FAILED " ++ formatMs(durationMs))),
+      Skipped(_) => print(yellow(def.name ++ " ... ignored")),
     }
     result
   }
@@ -520,29 +531,27 @@ provide enum Reporter {
 provide let printResults = (suite) => {
   // Section 1: Running tests (already printed during execution)
   print("")
-  
+
   let failures = List.filter(r => match (r.status) { Failed(_) => true, _ => false }, suite.results)
   let fileInfo = if (String.isEmpty(currentSourceFile)) { "" } else { " => " ++ currentSourceFile }
-  
+
   // Section 2: ERRORS - detailed error messages
   if (!List.isEmpty(failures)) {
-    print("")
-    print(" ERRORS ")
+    print(" " ++ whiteOnRed("ERRORS") ++ " ")
     print("")
     List.forEach(result => {
       match (result.status) {
         Failed(msg) => {
           print(result.name ++ fileInfo)
-          print("error: " ++ msg)
+          print(red("error:") ++ " " ++ msg)
           print("")
         },
         _ => void,
       }
     }, failures)
-    
+
     // Section 3: FAILURES - just the names
-    print("")
-    print(" FAILURES ")
+    print(" " ++ whiteOnRed("FAILURES") ++ " ")
     print("")
     List.forEach(result => {
       match (result.status) {
@@ -552,12 +561,20 @@ provide let printResults = (suite) => {
     }, failures)
     print("")
   }
-  
-  // Section 4: Summary line
+
+  // Section 4: Summary line (Deno-like)
+  let rec sumDurations = (results) => {
+    match (results) {
+      [] => 0,
+      [first, ...rest] => first.durationMs + sumDurations(rest),
+    }
+  }
+  let totalDurationMs = sumDurations(suite.results)
+  let durationStr = " (" ++ toString(totalDurationMs) ++ "ms)"
   if (suite.failed > 0) {
-    print("FAILED | " ++ toString(suite.passed) ++ " passed | " ++ toString(suite.failed) ++ " failed | " ++ toString(suite.skipped) ++ " skipped")
+    print(red("FAILED | " ++ toString(suite.passed) ++ " passed | " ++ toString(suite.failed) ++ " failed | " ++ toString(suite.skipped) ++ " ignored" ++ durationStr))
   } else {
-    print("ok | " ++ toString(suite.passed) ++ " passed | " ++ toString(suite.skipped) ++ " skipped")
+    print(green("ok | " ++ toString(suite.passed) ++ " passed | " ++ toString(suite.skipped) ++ " ignored" ++ durationStr))
   }
 }
 
