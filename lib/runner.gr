@@ -1,0 +1,332 @@
+module Runner
+
+from "wasi/process" include Process
+from "list" include List
+from "array" include Array
+from "string" include String
+from "option" include Option
+from "result" include Result
+from "fs" include Fs
+use Fs.{ type DirectoryEntry, type FileType }
+from "path" include Path
+
+// =============================================================================
+// Types
+// =============================================================================
+
+provide enum OutputMode {
+  Human,
+  List,
+  Shell,
+  Batch,
+}
+
+provide record CliOptions {
+  filter: Option<String>,
+  failFast: Bool,
+  quiet: Bool,
+  verbose: Bool,
+  showHelp: Bool,
+  outputMode: OutputMode,
+  testPaths: List<String>,
+}
+
+// =============================================================================
+// CLI Argument Parsing
+// =============================================================================
+
+provide let defaultCliOptions = () => {
+  {
+    filter: None,
+    failFast: false,
+    quiet: false,
+    verbose: false,
+    showHelp: false,
+    outputMode: Human,
+    testPaths: [],
+  }
+}
+
+let parseArgs = (args) => {
+  let mut opts = defaultCliOptions()
+  let mut i = 0
+  let len = Array.length(args)
+  
+  while (i < len) {
+    let arg = args[i]
+    if (arg == "--help" || arg == "-h") {
+      opts = { ...opts, showHelp: true }
+    } else if (arg == "--filter" || arg == "-f") {
+      if (i + 1 < len) {
+        i += 1
+        opts = { ...opts, filter: Some(args[i]) }
+      }
+    } else if (arg == "--fail-fast") {
+      opts = { ...opts, failFast: true }
+    } else if (arg == "--quiet" || arg == "-q") {
+      opts = { ...opts, quiet: true }
+    } else if (arg == "--verbose" || arg == "-v") {
+      opts = { ...opts, verbose: true }
+    } else if (arg == "--list") {
+      opts = { ...opts, outputMode: List }
+    } else if (arg == "--shell" || arg == "--sh") {
+      opts = { ...opts, outputMode: Shell }
+    } else if (arg == "--batch" || arg == "--bat" || arg == "--cmd") {
+      opts = { ...opts, outputMode: Batch }
+    } else if (!String.startsWith("-", arg)) {
+      opts = { ...opts, testPaths: List.append(opts.testPaths, [arg]) }
+    }
+    i += 1
+  }
+  
+  opts
+}
+
+// =============================================================================
+// Help Text
+// =============================================================================
+
+let printHelp = () => {
+  print("Grain Test Runner - Test Discovery CLI")
+  print("")
+  print("USAGE:")
+  print("  wasmtime --dir . runner.wasm -- [OPTIONS] [PATHS...]")
+  print("")
+  print("OUTPUT MODES:")
+  print("  (default)    Human-readable with instructions")
+  print("  --list       One file per line (for piping)")
+  print("  --shell      Output shell commands (bash/zsh)")
+  print("  --batch      Output batch commands (cmd/powershell)")
+  print("")
+  print("OPTIONS:")
+  print("  -h, --help   Show this help message")
+  print("  -f, --filter Only include files matching pattern")
+  print("")
+  print("PATHS:")
+  print("  Test file paths or directories to scan")
+  print("  If not specified, scans ./tests")
+  print("")
+  print("EXAMPLES:")
+  print("  # Discover tests")
+  print("  wasmtime --dir . runner.wasm -- ./tests")
+  print("")
+  print("  # Generate shell script and run")
+  print("  wasmtime --dir . runner.wasm -- --shell ./tests > run.sh && sh run.sh")
+  print("")
+  print("  # Pipe to shell directly (Unix)")
+  print("  wasmtime --dir . runner.wasm -- --shell ./tests | sh")
+  print("")
+  print("  # PowerShell")
+  print("  wasmtime --dir . runner.wasm -- --batch ./tests | Invoke-Expression")
+}
+
+// =============================================================================
+// Test File Discovery
+// =============================================================================
+
+let isTestFile = (name) => {
+  String.endsWith("_test.gr", name) || String.endsWith(".test.gr", name)
+}
+
+let checkTestFile = (filePath) => {
+  let path = Path.fromString(filePath)
+  match (Fs.stats(path)) {
+    Ok(stats) => match (stats.fileType) {
+      Fs.File => isTestFile(filePath),
+      _ => false,
+    },
+    Err(_) => false,
+  }
+}
+
+let rec discoverTestFiles = (basePath) => {
+  let path = Path.fromString(basePath)
+  match (Fs.stats(path)) {
+    Ok(stats) => match (stats.fileType) {
+      Fs.File => {
+        if (isTestFile(basePath)) {
+          [basePath]
+        } else {
+          []
+        }
+      },
+      Fs.Directory => {
+        match (Fs.readDir(path)) {
+          Ok(entries) => {
+            List.flatMap(entry => {
+              let entryPath = basePath ++ "/" ++ entry.name
+              match (entry.fileType) {
+                Fs.File => {
+                  if (isTestFile(entry.name)) {
+                    [entryPath]
+                  } else {
+                    []
+                  }
+                },
+                Fs.Directory => {
+                  if (entry.name != "." && entry.name != "..") {
+                    discoverTestFiles(entryPath)
+                  } else {
+                    []
+                  }
+                },
+                _ => [],
+              }
+            }, entries)
+          },
+          Err(_) => [],
+        }
+      },
+      _ => [],
+    },
+    Err(_) => [],
+  }
+}
+
+// =============================================================================
+// Output Functions
+// =============================================================================
+
+let outputHuman = (files) => {
+  if (List.isEmpty(files)) {
+    print("No test files found.")
+    print("Test files should match: *_test.gr or *.test.gr")
+    print("")
+    print("Make sure to run with wasmtime for directory scanning:")
+    print("  grain compile lib/runner.gr -o runner.wasm")
+    print("  wasmtime --dir . runner.wasm -- ./tests")
+  } else {
+    print("Discovered " ++ toString(List.length(files)) ++ " test file(s):")
+    print("")
+    List.forEach(f => print("  " ++ f), files)
+    print("")
+    print("Run all tests:")
+    print("  # Unix/macOS")
+    print("  wasmtime --dir . runner.wasm -- --shell ./tests | sh")
+    print("")
+    print("  # Windows PowerShell")
+    print("  wasmtime --dir . runner.wasm -- --batch ./tests | iex")
+    print("")
+    print("Run single test:")
+    match (List.head(files)) {
+      Some(f) => print("  grain " ++ f),
+      None => void,
+    }
+  }
+}
+
+let outputList = (files) => {
+  List.forEach(f => print(f), files)
+}
+
+let outputShell = (files) => {
+  print("#!/bin/sh")
+  print("# Generated by Grain Test Runner")
+  print("")
+  print("PASSED=0")
+  print("FAILED=0")
+  print("CRASHED=0")
+  print("")
+  print("echo \"Running " ++ toString(List.length(files)) ++ " test file(s)...\"")
+  print("echo \"\"")
+  List.forEach(f => {
+    print("echo \"=== " ++ f ++ " ===\"")
+    print("if grain \"" ++ f ++ "\"; then")
+    print("  PASSED=$((PASSED + 1))")
+    print("else")
+    print("  EXIT_CODE=$?")
+    print("  if [ $EXIT_CODE -eq 1 ]; then")
+    print("    FAILED=$((FAILED + 1))")
+    print("    echo \"[FAILED] Test assertions failed\"")
+    print("  else")
+    print("    CRASHED=$((CRASHED + 1))")
+    print("    echo \"[CRASHED] Process exited with code $EXIT_CODE (panic/div-by-zero/OOM)\"")
+    print("  fi")
+    print("fi")
+    print("echo \"\"")
+  }, files)
+  print("echo \"========================================\"")
+  print("echo \"Results: $PASSED passed, $FAILED failed, $CRASHED crashed\"")
+  print("echo \"========================================\"")
+  print("if [ $FAILED -gt 0 ] || [ $CRASHED -gt 0 ]; then")
+  print("  exit 1")
+  print("fi")
+}
+
+let outputBatch = (files) => {
+  print("# Grain Test Runner - PowerShell")
+  print("$ErrorActionPreference = 'Continue'")
+  print("")
+  print("$Passed = 0")
+  print("$Failed = 0")
+  print("$Crashed = 0")
+  print("")
+  print("Write-Host \"Running " ++ toString(List.length(files)) ++ " test file(s)...\"")
+  print("Write-Host \"\"")
+  List.forEach(f => {
+    print("Write-Host \"=== " ++ f ++ " ===\"")
+    print("grain \"" ++ f ++ "\"")
+    print("if ($LASTEXITCODE -eq 0) {")
+    print("  $Passed++")
+    print("} elseif ($LASTEXITCODE -eq 1) {")
+    print("  $Failed++")
+    print("  Write-Host \"[FAILED] Test assertions failed\" -ForegroundColor Red")
+    print("} else {")
+    print("  $Crashed++")
+    print("  Write-Host \"[CRASHED] Process exited with code $LASTEXITCODE (panic/div-by-zero/OOM)\" -ForegroundColor Magenta")
+    print("}")
+    print("Write-Host \"\"")
+  }, files)
+  print("Write-Host \"========================================\"")
+  print("Write-Host \"Results: $Passed passed, $Failed failed, $Crashed crashed\"")
+  print("Write-Host \"========================================\"")
+  print("if ($Failed -gt 0 -or $Crashed -gt 0) { exit 1 }")
+}
+
+// =============================================================================
+// Main Entry Point
+// =============================================================================
+
+provide let main = () => {
+  match (Process.argv()) {
+    Ok(args) => {
+      let argsList = Array.toList(args)
+      let relevantArgs = match (argsList) {
+        [_, ...rest] => Array.fromList(rest),
+        _ => [>],
+      }
+      
+      let opts = parseArgs(relevantArgs)
+      
+      if (opts.showHelp) {
+        printHelp()
+      } else {
+        let testPaths = if (List.isEmpty(opts.testPaths)) {
+          ["./tests"]
+        } else {
+          opts.testPaths
+        }
+        
+        let allTestFiles = List.flatMap(discoverTestFiles, testPaths)
+        
+        // Apply filter if specified
+        let filteredFiles = match (opts.filter) {
+          Some(pattern) => List.filter(f => String.contains(pattern, f), allTestFiles),
+          None => allTestFiles,
+        }
+        
+        match (opts.outputMode) {
+          Human => outputHuman(filteredFiles),
+          List => outputList(filteredFiles),
+          Shell => outputShell(filteredFiles),
+          Batch => outputBatch(filteredFiles),
+        }
+      }
+    },
+    Err(_) => {
+      print("Error: Could not read command line arguments")
+    },
+  }
+}
+
+main()

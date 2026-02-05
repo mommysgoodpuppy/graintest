@@ -1,0 +1,29 @@
+module FailureDemoTest
+
+from "../lib/test.gr" include Test
+use Test.*
+
+setSourceFile("./tests/failure_demo_test.gr")
+
+test("this test passes", () => {
+  assertEquals(1, 1)
+})
+
+test("this test fails - wrong value", () => {
+  assertEquals(42, 1 + 1)
+})
+
+test("this test passes too", () => {
+  assertTrue(true)
+})
+
+test("this test fails - expected true", () => {
+  assertTrue(false)
+})
+
+test("this test fails - string mismatch", () => {
+  assertContains("Hello", "World")
+})
+
+let results = runTests()
+printResultsAndExit(results)

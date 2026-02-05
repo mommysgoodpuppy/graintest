@@ -1,0 +1,55 @@
+module Bdd
+
+from "list" include List
+from "string" include String
+from "option" include Option
+from "result" include Result
+from "./test.gr" include Test
+
+// =============================================================================
+// BDD-style API (describe/it)
+// Inspired by Jasmine, Jest, Mocha
+// =============================================================================
+
+let mut currentDescribe = ""
+
+provide let describe = (name, fn) => {
+  let prevDescribe = currentDescribe
+  currentDescribe = if (String.isEmpty(prevDescribe)) {
+    name
+  } else {
+    prevDescribe ++ " > " ++ name
+  }
+  fn()
+  currentDescribe = prevDescribe
+}
+
+provide let it = (name, fn) => {
+  let fullName = if (String.isEmpty(currentDescribe)) {
+    name
+  } else {
+    currentDescribe ++ " > " ++ name
+  }
+  Test.test(fullName, fn)
+}
+
+provide let xit = (name, fn) => {
+  let fullName = if (String.isEmpty(currentDescribe)) {
+    name
+  } else {
+    currentDescribe ++ " > " ++ name
+  }
+  Test.skip(fullName, fn)
+}
+
+provide let fit = (name, fn) => {
+  let fullName = if (String.isEmpty(currentDescribe)) {
+    name
+  } else {
+    currentDescribe ++ " > " ++ name
+  }
+  Test.only(fullName, fn)
+}
+
+provide let runSuite = Test.runTests
+provide let printResults = Test.printResults

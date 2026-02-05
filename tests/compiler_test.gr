@@ -1,0 +1,136 @@
+module CompilerTest
+
+from "../lib/test.gr" include Test
+use Test.*
+
+setSourceFile("./tests/compiler_test.gr")
+
+from "list" include List
+from "option" include Option
+
+// =============================================================================
+// Example: Compiler/Parser Testing Pattern
+// This demonstrates how to structure tests similar to Deno.test style
+// for compiler/parser testing
+// =============================================================================
+
+// Mock types representing AST nodes (in real usage, import from your compiler)
+record TypeScheme {
+  name: String,
+  typeStr: String,
+}
+
+record InferResult {
+  summaries: List<TypeScheme>,
+  diagnostics: List<String>,
+}
+
+// Mock helper functions (in real usage, import from your compiler modules)
+let inferTypes = (source) => {
+  // Simulated inference - in real code this would call your actual inferrer
+  if (source == "let id = (x) => { x };") {
+    { summaries: [{ name: "id", typeStr: "T -> T" }], diagnostics: [] }
+  } else if (source == "let bad = (x: Int) => { true };") {
+    { summaries: [{ name: "bad", typeStr: "Int -> Bool" }], diagnostics: ["type_mismatch"] }
+  } else {
+    { summaries: [], diagnostics: [] }
+  }
+}
+
+let findBinding = (name, summaries) => {
+  List.find(s => s.name == name, summaries)
+}
+
+// =============================================================================
+// Tests - Deno.test style
+// =============================================================================
+
+test("infers polymorphic identity function", () => {
+  let source = "let id = (x) => { x };"
+  let result = inferTypes(source)
+  
+  let summaries = result.summaries
+  
+  all([
+    assertListLength(summaries, 1),
+    assertEquals(Some({ name: "id", typeStr: "T -> T" }), List.head(summaries)),
+  ])
+})
+
+test("type mismatch produces diagnostic", () => {
+  let source = "let bad = (x: Int) => { true };"
+  let result = inferTypes(source)
+  
+  let hasMismatch = List.contains("type_mismatch", result.diagnostics)
+  assertThat(hasMismatch, "expected type_mismatch diagnostic")
+})
+
+test("finding binding by name works", () => {
+  let source = "let id = (x) => { x };"
+  let result = inferTypes(source)
+  
+  let binding = findBinding("id", result.summaries)
+  
+  all([
+    assertExists(binding),
+    assertEquals(
+      Some({ name: "id", typeStr: "T -> T" }),
+      binding
+    ),
+  ])
+})
+
+test("missing binding returns None", () => {
+  let source = "let id = (x) => { x };"
+  let result = inferTypes(source)
+  
+  let binding = findBinding("nonexistent", result.summaries)
+  assertNone(binding)
+})
+
+// =============================================================================
+// Pattern: Testing with setup/teardown context
+// =============================================================================
+
+let mut testContext = ""
+
+beforeEach(() => {
+  testContext = "initialized"
+})
+
+afterEach(() => {
+  testContext = ""
+})
+
+test("context is available in tests", () => {
+  assertEquals("initialized", testContext)
+})
+
+// =============================================================================
+// Pattern: Helper function for repeated assertions
+// =============================================================================
+
+let assertInfersType = (source, expectedName, expectedType) => {
+  let result = inferTypes(source)
+  let binding = findBinding(expectedName, result.summaries)
+  
+  match (binding) {
+    None => Err("expected binding " ++ expectedName ++ " not found"),
+    Some(b) => if (b.typeStr == expectedType) {
+      Ok(void)
+    } else {
+      Err("expected type " ++ expectedType ++ ", got " ++ b.typeStr)
+    },
+  }
+}
+
+test("helper function pattern works", () => {
+  assertInfersType("let id = (x) => { x };", "id", "T -> T")
+})
+
+// =============================================================================
+// Run tests
+// =============================================================================
+
+let results = runTests()
+printResultsAndExit(results)

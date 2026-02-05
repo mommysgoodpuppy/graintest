@@ -1,0 +1,29 @@
+module StringTest
+
+from "../lib/test.gr" include Test
+use Test.*
+
+setSourceFile("./tests/string_test.gr")
+
+test("string contains works", () => {
+  assertContains("Hello World", "World")
+})
+
+test("string startsWith works", () => {
+  assertStartsWith("Hello World", "Hello")
+})
+
+test("string endsWith works", () => {
+  assertEndsWith("Hello World", "World")
+})
+
+test("empty string checks", () => {
+  all([
+    assertContains("", ""),
+    assertStartsWith("test", ""),
+    assertEndsWith("test", ""),
+  ])
+})
+
+let results = runTests()
+printResultsAndExit(results)

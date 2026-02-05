@@ -1,0 +1,49 @@
+module MathTest
+
+from "../lib/test.gr" include Test
+use Test.*
+
+setSourceFile("./tests/math_test.gr")
+
+test("addition works correctly", () => {
+  assertEquals(2, 1 + 1)
+})
+
+test("subtraction works correctly", () => {
+  assertEquals(3, 5 - 2)
+})
+
+test("multiplication works correctly", () => {
+  assertEquals(12, 3 * 4)
+})
+
+test("division works correctly", () => {
+  assertEquals(5, 10 / 2)
+})
+
+test("comparison operators work", () => {
+  all([
+    assertTrue(5 > 3),
+    assertTrue(3 < 5),
+    assertTrue(5 >= 5),
+    assertTrue(5 <= 5),
+    assertFalse(3 > 5),
+  ])
+})
+
+test("chained assertions with andThen", () => {
+  andThen(
+    andThen(
+      assertTrue(true),
+      () => assertEquals(10, 5 + 5)
+    ),
+    () => assertGreater(10, 5)
+  )
+})
+
+skip("this test is skipped", () => {
+  assertEquals(1, 2)
+})
+
+let results = runTests()
+printResultsAndExit(results)

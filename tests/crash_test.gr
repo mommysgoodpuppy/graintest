@@ -1,0 +1,30 @@
+module CrashTest
+
+from "../lib/test.gr" include Test
+use Test.*
+from "array" include Array
+from "runtime/unsafe/panic" include Panic
+
+// This test file demonstrates hard failures that crash the process
+// Run with: grain tests/crash_test.gr
+// Expected: Process exits with non-zero, non-1 code
+
+test("this test passes before crash", () => {
+  log("About to run a test that will crash...")
+  assertEquals(1, 1)
+})
+
+test("array out of bounds crashes", () => {
+  log("Attempting array out of bounds access...")
+  let arr = [> 1, 2, 3]
+  let x = arr[100]  // Out of bounds
+  assertEquals(0, x)
+})
+
+test("this test never runs", () => {
+  log("This should not appear")
+  assertTrue(true)
+})
+
+let results = runTests()
+printResultsAndExit(results)

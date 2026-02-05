@@ -1,0 +1,42 @@
+module HooksTest
+
+from "../lib/test.gr" include Test
+use Test.*
+
+setSourceFile("./tests/hooks_test.gr")
+
+let mut setupCount = 0
+let mut teardownCount = 0
+
+beforeAll(() => {
+  print("  [beforeAll] Setting up test suite")
+  setupCount += 1
+})
+
+afterAll(() => {
+  print("  [afterAll] Tearing down test suite")
+})
+
+beforeEach(() => {
+  print("  [beforeEach] Before test")
+})
+
+afterEach(() => {
+  print("  [afterEach] After test")
+  teardownCount += 1
+})
+
+test("first test with hooks", () => {
+  assertTrue(setupCount == 1)
+})
+
+test("second test with hooks", () => {
+  assertTrue(setupCount == 1)
+})
+
+test("teardown count increments", () => {
+  assertGreaterOrEqual(teardownCount, 1)
+})
+
+let results = runTests()
+printResultsAndExit(results)

@@ -1,0 +1,649 @@
+module Test
+
+from "list" include List
+from "array" include Array
+from "string" include String
+from "option" include Option
+from "result" include Result
+from "wasi/process" include Process
+from "wasi/time" include Time
+from "int64" include Int64
+
+// =============================================================================
+// Types
+// =============================================================================
+
+provide enum TestStatus {
+  Passed,
+  Failed(String),
+  Skipped(String),
+}
+
+provide record TestResult {
+  name: String,
+  status: TestStatus,
+  durationMs: Number,
+}
+
+provide record TestOptions {
+  ignore: Bool,
+  only: Bool,
+}
+
+provide record TestDefinition {
+  name: String,
+  fn: () => Result<Void, String>,
+  options: TestOptions,
+}
+
+provide record TestSuiteResult {
+  passed: Number,
+  failed: Number,
+  skipped: Number,
+  results: List<TestResult>,
+}
+
+// =============================================================================
+// Logging
+// =============================================================================
+
+let mut testLogs: List<String> = []
+let mut loggingEnabled = true
+
+provide let log = (message) => {
+  if (loggingEnabled) {
+    testLogs = List.append(testLogs, [message])
+    print("    [log] " ++ message)
+  }
+}
+
+provide let logQuiet = (message) => {
+  testLogs = List.append(testLogs, [message])
+}
+
+provide let getLogs = () => testLogs
+
+provide let clearLogs = () => {
+  testLogs = []
+}
+
+provide let setLogging = (enabled) => {
+  loggingEnabled = enabled
+}
+
+// =============================================================================
+// Internal State
+// =============================================================================
+
+let mut registeredTests: List<TestDefinition> = []
+let mut beforeAllHooks: List<() => Void> = []
+let mut afterAllHooks: List<() => Void> = []
+let mut beforeEachHooks: List<() => Void> = []
+let mut afterEachHooks: List<() => Void> = []
+let mut currentSourceFile: String = ""
+
+// =============================================================================
+// Source File Tracking
+// =============================================================================
+
+provide let setSourceFile = (file) => {
+  currentSourceFile = file
+}
+
+provide let getSourceFile = () => currentSourceFile
+
+// =============================================================================
+// Timing Helpers
+// =============================================================================
+
+let getTimeNs = () => {
+  match (Time.monotonicTime()) {
+    Ok(t) => t,
+    Err(_) => 0L,
+  }
+}
+
+let nsToMs = (ns) => {
+  Int64.toNumber(ns) / 1000000
+}
+
+// =============================================================================
+// Default Options
+// =============================================================================
+
+provide let defaultOptions = () => {
+  { ignore: false, only: false }
+}
+
+// =============================================================================
+// Test Registration API (Deno-style)
+// =============================================================================
+
+provide let test = (name: String, fn: () => Result<Void, String>) => {
+  let def = {
+    name,
+    fn,
+    options: defaultOptions(),
+  }
+  registeredTests = List.append(registeredTests, [def])
+}
+
+provide let testWithOptions = (name: String, options: TestOptions, fn: () => Result<Void, String>) => {
+  let def = {
+    name,
+    fn,
+    options,
+  }
+  registeredTests = List.append(registeredTests, [def])
+}
+
+provide let skip = (name: String, fn: () => Result<Void, String>) => {
+  testWithOptions(name, { ignore: true, only: false }, fn)
+}
+
+provide let only = (name: String, fn: () => Result<Void, String>) => {
+  testWithOptions(name, { ignore: false, only: true }, fn)
+}
+
+// =============================================================================
+// Test Hooks
+// =============================================================================
+
+provide let beforeAll = (fn: () => Void) => {
+  beforeAllHooks = List.append(beforeAllHooks, [fn])
+}
+
+provide let afterAll = (fn: () => Void) => {
+  afterAllHooks = List.append(afterAllHooks, [fn])
+}
+
+provide let beforeEach = (fn: () => Void) => {
+  beforeEachHooks = List.append(beforeEachHooks, [fn])
+}
+
+provide let afterEach = (fn: () => Void) => {
+  afterEachHooks = List.append(afterEachHooks, [fn])
+}
+
+// =============================================================================
+// Assertions (return Result<Void, String>)
+// =============================================================================
+
+provide let assertEquals = (expected, actual) => {
+  if (expected != actual) {
+    Err("AssertionError: Values are not equal.\n\n    [Diff] Actual / Expected\n\n-   " ++ toString(actual) ++ "\n+   " ++ toString(expected))
+  } else {
+    Ok(void)
+  }
+}
+
+provide let assertNotEquals = (unexpected, actual) => {
+  if (unexpected == actual) {
+    Err("Expected values to be different, but both were: " ++ toString(actual))
+  } else {
+    Ok(void)
+  }
+}
+
+provide let assertStrictEquals = (expected, actual) => {
+  if (!(expected is actual)) {
+    Err("Expected (strict): " ++ toString(expected) ++ "\nActual: " ++ toString(actual))
+  } else {
+    Ok(void)
+  }
+}
+
+provide let assertTrue = (actual) => {
+  if (!actual) {
+    Err("Expected true, got false")
+  } else {
+    Ok(void)
+  }
+}
+
+provide let assertFalse = (actual) => {
+  if (actual) {
+    Err("Expected false, got true")
+  } else {
+    Ok(void)
+  }
+}
+
+provide let assertSome = (value) => {
+  match (value) {
+    None => Err("Expected Some(_), got None"),
+    Some(_) => Ok(void),
+  }
+}
+
+provide let assertExists = assertSome
+
+provide let assertThat = (condition, message) => {
+  if (!condition) {
+    Err(message)
+  } else {
+    Ok(void)
+  }
+}
+
+// ADT variant assertions - use pattern matching predicates
+provide let assertMatches = (value, predicate, message) => {
+  if (predicate(value)) {
+    Ok(void)
+  } else {
+    Err(message)
+  }
+}
+
+// Common ADT variant checkers
+provide let isSome = (opt) => match (opt) { Some(_) => true, _ => false }
+provide let isNone = (opt) => match (opt) { None => true, _ => false }
+provide let isOk = (res) => match (res) { Ok(_) => true, _ => false }
+provide let isErr = (res) => match (res) { Err(_) => true, _ => false }
+
+// Convenient ADT assertions combining matcher + check
+provide let assertIsSome = (value) => {
+  assertMatches(value, isSome, "Expected Some(_), got None")
+}
+
+provide let assertIsNone = (value) => {
+  assertMatches(value, isNone, "Expected None, got Some(_)")
+}
+
+provide let assertIsOk = (value) => {
+  assertMatches(value, isOk, "Expected Ok(_), got Err(_)")
+}
+
+provide let assertIsErr = (value) => {
+  assertMatches(value, isErr, "Expected Err(_), got Ok(_)")
+}
+
+provide let assertNone = (value) => {
+  match (value) {
+    Some(v) => Err("Expected None, got Some(" ++ toString(v) ++ ")"),
+    None => Ok(void),
+  }
+}
+
+provide let assertOk = (value) => {
+  match (value) {
+    Err(e) => Err("Expected Ok(_), got Err(" ++ toString(e) ++ ")"),
+    Ok(_) => Ok(void),
+  }
+}
+
+provide let assertErr = (value) => {
+  match (value) {
+    Ok(v) => Err("Expected Err(_), got Ok(" ++ toString(v) ++ ")"),
+    Err(_) => Ok(void),
+  }
+}
+
+provide let assertContains = (haystack, needle) => {
+  if (!String.contains(needle, haystack)) {
+    Err("Expected \"" ++ haystack ++ "\" to contain \"" ++ needle ++ "\"")
+  } else {
+    Ok(void)
+  }
+}
+
+provide let assertStartsWith = (str, prefix) => {
+  if (!String.startsWith(prefix, str)) {
+    Err("Expected \"" ++ str ++ "\" to start with \"" ++ prefix ++ "\"")
+  } else {
+    Ok(void)
+  }
+}
+
+provide let assertEndsWith = (str, suffix) => {
+  if (!String.endsWith(suffix, str)) {
+    Err("Expected \"" ++ str ++ "\" to end with \"" ++ suffix ++ "\"")
+  } else {
+    Ok(void)
+  }
+}
+
+provide let assertGreater = (left, right) => {
+  if (!(left > right)) {
+    Err("Expected " ++ toString(left) ++ " > " ++ toString(right))
+  } else {
+    Ok(void)
+  }
+}
+
+provide let assertGreaterOrEqual = (left, right) => {
+  if (!(left >= right)) {
+    Err("Expected " ++ toString(left) ++ " >= " ++ toString(right))
+  } else {
+    Ok(void)
+  }
+}
+
+provide let assertLess = (left, right) => {
+  if (!(left < right)) {
+    Err("Expected " ++ toString(left) ++ " < " ++ toString(right))
+  } else {
+    Ok(void)
+  }
+}
+
+provide let assertLessOrEqual = (left, right) => {
+  if (!(left <= right)) {
+    Err("Expected " ++ toString(left) ++ " <= " ++ toString(right))
+  } else {
+    Ok(void)
+  }
+}
+
+provide let assertListLength = (list, expected) => {
+  let actual = List.length(list)
+  if (actual != expected) {
+    Err("Expected list length " ++ toString(expected) ++ ", got " ++ toString(actual))
+  } else {
+    Ok(void)
+  }
+}
+
+provide let assertArrayLength = (arr, expected) => {
+  let actual = Array.length(arr)
+  if (actual != expected) {
+    Err("Expected array length " ++ toString(expected) ++ ", got " ++ toString(actual))
+  } else {
+    Ok(void)
+  }
+}
+
+provide let assertSnapshot = (value, snapshot) => {
+  let actual = toString(value)
+  if (actual != snapshot) {
+    Err("Snapshot mismatch:\nExpected:\n" ++ snapshot ++ "\nActual:\n" ++ actual)
+  } else {
+    Ok(void)
+  }
+}
+
+// =============================================================================
+// Assertion Combinators
+// =============================================================================
+
+provide let all = (assertions) => {
+  let rec check = (list) => {
+    match (list) {
+      [] => Ok(void),
+      [first, ...rest] => match (first) {
+        Err(msg) => Err(msg),
+        Ok(_) => check(rest),
+      },
+    }
+  }
+  check(assertions)
+}
+
+provide let andThen = (result, next) => {
+  match (result) {
+    Err(msg) => Err(msg),
+    Ok(_) => next(),
+  }
+}
+
+// =============================================================================
+// Test Execution
+// =============================================================================
+
+let runHooks = (hooks) => {
+  List.forEach(hook => hook(), hooks)
+}
+
+let runHooksReverse = (hooks) => {
+  List.forEach(hook => hook(), List.reverse(hooks))
+}
+
+let formatMs = (ms) => {
+  if (ms < 1) {
+    "(<1ms)"
+  } else {
+    "(" ++ toString(ms) ++ "ms)"
+  }
+}
+
+let runSingleTest = (def) => {
+  if (def.options.ignore) {
+    let result = { name: def.name, status: Skipped("Test marked as ignore"), durationMs: 0 }
+    print(def.name ++ " ... ignored")
+    result
+  } else {
+    let start = getTimeNs()
+    runHooks(beforeEachHooks)
+    let fnResult = def.fn()
+    runHooksReverse(afterEachHooks)
+    let end = getTimeNs()
+    let durationMs = nsToMs(Int64.(-)(end, start))
+    let result = match (fnResult) {
+      Ok(_) => { name: def.name, status: Passed, durationMs },
+      Err(msg) => { name: def.name, status: Failed(msg), durationMs },
+    }
+    match (result.status) {
+      Passed => print(def.name ++ " ... ok " ++ formatMs(durationMs)),
+      Failed(_) => print(def.name ++ " ... FAILED " ++ formatMs(durationMs)),
+      Skipped(_) => print(def.name ++ " ... ignored"),
+    }
+    result
+  }
+}
+
+let hasOnlyTests = (tests) => {
+  List.some(t => t.options.only, tests)
+}
+
+let isFailed = (result) => {
+  match (result.status) {
+    Failed(_) => true,
+    _ => false,
+  }
+}
+
+let runTestsWithOptions = (tests, failFast) => {
+  let hasOnly = hasOnlyTests(tests)
+  let testCount = List.length(tests)
+  
+  // Print header like Deno: "running X tests from ./file.gr"
+  if (String.isEmpty(currentSourceFile)) {
+    print("running " ++ toString(testCount) ++ " tests")
+  } else {
+    print("running " ++ toString(testCount) ++ " tests from " ++ currentSourceFile)
+  }
+  
+  runHooks(beforeAllHooks)
+  
+  let rec runLoop = (remaining, acc, stopped) => {
+    match (remaining) {
+      [] => List.reverse(acc),
+      [(def: TestDefinition), ...rest] => {
+        if (stopped) {
+          let skipped: TestResult = { name: def.name, status: Skipped("Skipped (fail-fast)"), durationMs: 0 }
+          print(def.name ++ " ... ignored (fail-fast)")
+          runLoop(rest, [skipped, ...acc], true)
+        } else {
+          let result: TestResult = if (hasOnly && !def.options.only && !def.options.ignore) {
+            print(def.name ++ " ... ignored (filtered)")
+            { name: def.name, status: Skipped("Skipped (other tests marked as 'only')"), durationMs: 0 }
+          } else {
+            runSingleTest(def)
+          }
+          let shouldStop = failFast && isFailed(result)
+          runLoop(rest, [result, ...acc], shouldStop)
+        }
+      },
+    }
+  }
+  
+  let results = runLoop(tests, [], false)
+  
+  runHooksReverse(afterAllHooks)
+  
+  let passed = List.count(r => match (r.status) { Passed => true, _ => false }, results)
+  let failed = List.count(r => match (r.status) { Failed(_) => true, _ => false }, results)
+  let skipped = List.count(r => match (r.status) { Skipped(_) => true, _ => false }, results)
+  
+  { passed, failed, skipped, results }
+}
+
+provide let runTests = () => {
+  runTestsWithOptions(registeredTests, false)
+}
+
+provide let runTestsFailFast = () => {
+  runTestsWithOptions(registeredTests, true)
+}
+
+provide let runTestsFiltered = (filter) => {
+  let tests = List.filter((t: TestDefinition) => String.contains(filter, t.name), registeredTests)
+  runTestsWithOptions(tests, false)
+}
+
+provide let runTestsFilteredFailFast = (filter) => {
+  let tests = List.filter((t: TestDefinition) => String.contains(filter, t.name), registeredTests)
+  runTestsWithOptions(tests, true)
+}
+
+// =============================================================================
+// Reporting
+// =============================================================================
+
+provide enum Reporter {
+  Pretty,
+  Dot,
+  Compact,
+}
+
+// Deno-style output format
+provide let printResults = (suite) => {
+  // Section 1: Running tests (already printed during execution)
+  print("")
+  
+  let failures = List.filter(r => match (r.status) { Failed(_) => true, _ => false }, suite.results)
+  let fileInfo = if (String.isEmpty(currentSourceFile)) { "" } else { " => " ++ currentSourceFile }
+  
+  // Section 2: ERRORS - detailed error messages
+  if (!List.isEmpty(failures)) {
+    print("")
+    print(" ERRORS ")
+    print("")
+    List.forEach(result => {
+      match (result.status) {
+        Failed(msg) => {
+          print(result.name ++ fileInfo)
+          print("error: " ++ msg)
+          print("")
+        },
+        _ => void,
+      }
+    }, failures)
+    
+    // Section 3: FAILURES - just the names
+    print("")
+    print(" FAILURES ")
+    print("")
+    List.forEach(result => {
+      match (result.status) {
+        Failed(_) => print(result.name ++ fileInfo),
+        _ => void,
+      }
+    }, failures)
+    print("")
+  }
+  
+  // Section 4: Summary line
+  if (suite.failed > 0) {
+    print("FAILED | " ++ toString(suite.passed) ++ " passed | " ++ toString(suite.failed) ++ " failed | " ++ toString(suite.skipped) ++ " skipped")
+  } else {
+    print("ok | " ++ toString(suite.passed) ++ " passed | " ++ toString(suite.skipped) ++ " skipped")
+  }
+}
+
+provide let printResultsDot = (suite) => {
+  List.forEach(result => {
+    match (result.status) {
+      Passed => print("."),
+      Failed(_) => print("F"),
+      Skipped(_) => print("S"),
+    }
+  }, suite.results)
+  
+  print("")
+  
+  let failures = List.filter(r => match (r.status) { Failed(_) => true, _ => false }, suite.results)
+  if (!List.isEmpty(failures)) {
+    print("\nFailures:")
+    List.forEach(result => {
+      match (result.status) {
+        Failed(msg) => {
+          print("\n" ++ result.name ++ ":")
+          print("  " ++ msg)
+        },
+        _ => void,
+      }
+    }, failures)
+  }
+  
+  print("")
+  if (suite.failed > 0) {
+    print("FAILED | " ++ toString(suite.passed) ++ " passed | " ++ toString(suite.failed) ++ " failed | " ++ toString(suite.skipped) ++ " skipped")
+  } else {
+    print("ok | " ++ toString(suite.passed) ++ " passed | " ++ toString(suite.skipped) ++ " skipped")
+  }
+}
+
+provide let printResultsCompact = (suite) => {
+  let failures = List.filter(r => match (r.status) { Failed(_) => true, _ => false }, suite.results)
+  
+  if (!List.isEmpty(failures)) {
+    print("Failures:")
+    List.forEach(result => {
+      match (result.status) {
+        Failed(msg) => print("  " ++ result.name ++ ": " ++ msg),
+        _ => void,
+      }
+    }, failures)
+    print("")
+  }
+  
+  print(toString(suite.passed) ++ " passed, " ++ toString(suite.failed) ++ " failed, " ++ toString(suite.skipped) ++ " skipped")
+}
+
+provide let printResultsWithReporter = (suite, reporter) => {
+  match (reporter) {
+    Pretty => printResults(suite),
+    Dot => printResultsDot(suite),
+    Compact => printResultsCompact(suite),
+  }
+}
+
+// Exit with code 1 if any tests failed
+provide let exitIfFailed = (suite) => {
+  if (suite.failed > 0) {
+    ignore(Process.exit(1))
+  }
+}
+
+// Print results and exit with appropriate code
+provide let printResultsAndExit = (suite) => {
+  printResults(suite)
+  exitIfFailed(suite)
+}
+
+// =============================================================================
+// Reset (useful for test isolation)
+// =============================================================================
+
+provide let reset = () => {
+  registeredTests = []
+  beforeAllHooks = []
+  afterAllHooks = []
+  beforeEachHooks = []
+  afterEachHooks = []
+}
+
+provide let getRegisteredTests = () => {
+  registeredTests
+}
