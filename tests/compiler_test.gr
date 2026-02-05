@@ -37,7 +37,7 @@ let inferTypes = (source) => {
   }
 }
 
-let findBinding: (String, List<TypeScheme>) -> Option<TypeScheme> = (name, summaries) => {
+let findBinding: (String, List<TypeScheme>) => Option<TypeScheme> = (name, summaries) => {
   List.find(s => s.name == name, summaries)
 }
 
